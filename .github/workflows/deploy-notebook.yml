@@ -21,7 +21,7 @@ jobs:
         ORIGIN_HOST=${{ secrets.DATABRICKS_ORIGIN_HOST }}
         ORIGIN_TOKEN=${{ secrets.DATABRICKS_ORIGIN_TOKEN }}
         NOTEBOOK_BASE="/Workspace/Users/jorgee@osom.biz/ProyectoDatabricks/proceso"
-        NOTEBOOKS=("1.Preparacion_Ambiente" "2.Ingest_circuits_data" "2.Ingest_Constructors" "2.Ingest_racing_data" "3.Transform" "4.Load")  # Agrega más según necesitesas
+        NOTEBOOKS=( "2.Ingest_circuits_data" "1.Preparacion_Ambiente" "2.Ingest_Constructors" "2.Ingest_racing_data" "3.Transform" "4.Load")  # Agrega más según necesitesas
 
         mkdir -p notebooks_to_deploy
 
