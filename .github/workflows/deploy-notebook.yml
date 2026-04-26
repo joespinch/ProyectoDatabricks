@@ -18,30 +18,44 @@ jobs:
         ORIGIN_HOST=${{ secrets.DATABRICKS_ORIGIN_HOST }}
         ORIGIN_TOKEN=${{ secrets.DATABRICKS_ORIGIN_TOKEN }}
         NOTEBOOK_BASE="/Workspace/Users/jorgee@osom.biz/ProyectoDatabricks/proceso"
-        NOTEBOOKS=("1.Preparacion_Ambiente" "2.Ingest_circuits_data" "2.Ingest_Constructors" "2.Ingest_racing_data" "3.Transform" "4.Load")  # Agrega más según necesitesas
+        NOTEBOOKS=("1.Preparacion_Ambiente" "2.Ingest_circuits_data" "2.Ingest_Constructors" "2.Ingest_racing_data" "3.Transform" "4.Load")
         mkdir -p notebooks_to_deploy
         for nb in "${NOTEBOOKS[@]}"; do
           echo "Exportando $nb en modo raw....."
-          curl -s -X GET \
+          http_code=$(curl -s -o "notebooks_to_deploy/$nb.py" -w "%{http_code}" -X GET \
             -H "Authorization: Bearer $ORIGIN_TOKEN" \
-            "$ORIGIN_HOST/api/2.0/workspace/export?path=$NOTEBOOK_BASE/$nb&format=SOURCE&direct_download=true" \
-            --output "notebooks_to_deploy/$nb.py"
+            "$ORIGIN_HOST/api/2.0/workspace/export?path=$NOTEBOOK_BASE/$nb&format=SOURCE&direct_download=true")
+          file_size=$(stat -c%s "notebooks_to_deploy/$nb.py" 2>/dev/null || echo "0")
+          echo "  HTTP: $http_code | Tamaño: $file_size bytes"
+          if [ "$http_code" != "200" ] || [ "$file_size" -lt 10 ]; then
+            echo "❌ ERROR: Fallo al exportar $nb (HTTP $http_code, tamaño $file_size bytes)"
+            echo "  Contenido del archivo descargado:"
+            cat "notebooks_to_deploy/$nb.py" 2>/dev/null || echo "  (archivo vacío)"
+            exit 1
+          fi
+          echo "✅ $nb exportado correctamente"
         done
+        echo ""
+        echo "📋 Resumen de notebooks exportados:"
+        ls -la notebooks_to_deploy/
     
     - name: Deploy notebooks to Destination Workspace
       run: |
         DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
         DEST_BASE="/smartdata/scripts/main"
+
+        echo "Creando carpeta $DEST_BASE si no existe..."
+        curl -s -X POST \
+          -H "Authorization: Bearer $DEST_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "{\"path\":\"$DEST_BASE\"}" \
+          "$DEST_HOST/api/2.0/workspace/mkdirs"
+
+        deploy_errors=0
         for file in notebooks_to_deploy/*.py; do
           name=$(basename "$file" .py)
           dest_path="$DEST_BASE/$name"
-          echo "Creando carpeta $DEST_BASE si no existe..."
-          curl -s -X POST \
-            -H "Authorization: Bearer $DEST_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"path\":\"$DEST_BASE\"}" \
-            "$DEST_HOST/api/2.0/workspace/mkdirs"
           echo "Importando $file → $dest_path"
           response=$(curl -s -X POST \
             -H "Authorization: Bearer $DEST_TOKEN" \
@@ -52,8 +66,57 @@ jobs:
             -F "overwrite=true" \
             -F "content=@$file" \
             "$DEST_HOST/api/2.0/workspace/import")
-          echo "Response: $response"
+          
+          # Verificar si hubo error en la respuesta
+          error_code=$(echo "$response" | jq -r '.error_code // empty')
+          if [ -n "$error_code" ]; then
+            echo "❌ ERROR al importar $name: $response"
+            deploy_errors=$((deploy_errors + 1))
+          else
+            echo "✅ $name importado correctamente"
+          fi
         done
+
+        if [ $deploy_errors -gt 0 ]; then
+          echo "❌ Hubo $deploy_errors errores durante el despliegue"
+          exit 1
+        fi
+    
+    - name: Validate notebooks exist at destination
+      run: |
+        DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
+        DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
+        DEST_BASE="/smartdata/scripts/main"
+        NOTEBOOKS=("1.Preparacion_Ambiente" "2.Ingest_circuits_data" "2.Ingest_Constructors" "2.Ingest_racing_data" "3.Transform" "4.Load")
+        
+        echo "🔍 Validando que todos los notebooks existan en destino..."
+        validation_errors=0
+        for nb in "${NOTEBOOKS[@]}"; do
+          nb_path="$DEST_BASE/$nb"
+          status_response=$(curl -s -X GET \
+            -H "Authorization: Bearer $DEST_TOKEN" \
+            "$DEST_HOST/api/2.0/workspace/get-status?path=$nb_path")
+          
+          object_type=$(echo "$status_response" | jq -r '.object_type // empty')
+          error_code=$(echo "$status_response" | jq -r '.error_code // empty')
+          
+          if [ "$object_type" = "NOTEBOOK" ]; then
+            language=$(echo "$status_response" | jq -r '.language // "UNKNOWN"')
+            echo "✅ $nb_path → tipo: $object_type, lenguaje: $language"
+          else
+            echo "❌ $nb_path → NO ENCONTRADO (error: $error_code)"
+            echo "   Respuesta completa: $status_response"
+            validation_errors=$((validation_errors + 1))
+          fi
+        done
+        
+        if [ $validation_errors -gt 0 ]; then
+          echo ""
+          echo "❌ $validation_errors notebook(s) no encontrados en destino. Abortando."
+          exit 1
+        fi
+        echo ""
+        echo "✅ Todos los notebooks validados correctamente en destino."
     
     - name: Check if workflow exists and delete if necessary
       run: |
@@ -63,12 +126,10 @@ jobs:
         
         echo "Verificando si existe el workflow: $WORKFLOW_NAME"
         
-        # Listar todos los workflows y buscar por nombre
         workflows_response=$(curl -s -X GET \
           -H "Authorization: Bearer $DEST_TOKEN" \
           "$DEST_HOST/api/2.1/jobs/list")
         
-        # Extraer job_id si existe el workflow
         existing_job_id=$(echo "$workflows_response" | jq -r --arg name "$WORKFLOW_NAME" '.jobs[]? | select(.settings.name == $name) | .job_id')
         
         if [ "$existing_job_id" != "" ] && [ "$existing_job_id" != "null" ]; then
@@ -89,25 +150,25 @@ jobs:
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
         CLUSTER_NAME="cluster_SD"
         
-        echo "Buscando cluster   existente: $CLUSTER_NAME"
+        echo "Buscando cluster existente: $CLUSTER_NAME"
         
-        # Obtener lista de clusters
         clusters_response=$(curl -s -X GET \
           -H "Authorization: Bearer $DEST_TOKEN" \
           "$DEST_HOST/api/2.0/clusters/list")
         
-        echo "Clusters response: $clusters_response"
-        
-        # Extraer cluster_id del cluster especificado
         cluster_id=$(echo "$clusters_response" | jq -r --arg name "$CLUSTER_NAME" '.clusters[]? | select(.cluster_name == $name) | .cluster_id')
         
         if [ "$cluster_id" != "" ] && [ "$cluster_id" != "null" ]; then
-          echo "✅ Cluster encontrado: $CLUSTER_NAME con ID: $cluster_id"
+          # Verificar estado del cluster
+          cluster_state=$(echo "$clusters_response" | jq -r --arg name "$CLUSTER_NAME" '.clusters[]? | select(.cluster_name == $name) | .state')
+          echo "✅ Cluster encontrado: $CLUSTER_NAME"
+          echo "   ID: $cluster_id"
+          echo "   Estado: $cluster_state"
           echo "CLUSTER_ID=$cluster_id" >> $GITHUB_ENV
         else
           echo "❌ No se encontró el cluster: $CLUSTER_NAME"
           echo "Clusters disponibles:"
-          echo "$clusters_response" | jq -r '.clusters[]? | .cluster_name'
+          echo "$clusters_response" | jq -r '.clusters[]? | "  - " + .cluster_name + " (" + .state + ")"'
           exit 1
         fi
     
@@ -115,12 +176,11 @@ jobs:
       run: |
         DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
-        DEST_BASE="/smasrtdata/scripts/main"
+        DEST_BASE="/smartdata/scripts/main"
         CLUSTER_ID="${{ env.CLUSTER_ID }}"
         
         echo "Creando workflow: WF_ADB con cluster existente ID: $CLUSTER_ID"
         
-        # Crear el JSON del workflow usando cluster existente
         cat > workflow_config.json << EOF
         {
           "name": "WF_ADB",
@@ -128,7 +188,7 @@ jobs:
           "tasks": [
             {
               "task_key": "Preparacion_Ambiente",
-              "description": "Ejecuta notebook ntbk_1",
+              "description": "Ejecuta notebook 1.Preparacion_Ambiente",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/1.Preparacion_Ambiente",
                 "source": "WORKSPACE"
@@ -138,8 +198,8 @@ jobs:
               "max_retries": 2
             },
             {
-              "task_key": "Imgest_circuits_data",
-              "description": "Ejecuta notebook Imgest_circuits_data",
+              "task_key": "Ingest_circuits_data",
+              "description": "Ejecuta notebook 2.Ingest_circuits_data",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/2.Ingest_circuits_data",
                 "source": "WORKSPACE"
@@ -155,7 +215,7 @@ jobs:
             },
             {
               "task_key": "Ingest_Constructors",
-              "description": "Ejecuta notebook Ingest_Constructors",
+              "description": "Ejecuta notebook 2.Ingest_Constructors",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/2.Ingest_Constructors",
                 "source": "WORKSPACE"
@@ -171,7 +231,7 @@ jobs:
             },
             {
               "task_key": "Ingest_racing_data",
-              "description": "Ejecuta notebook Ingest_racing_data",
+              "description": "Ejecuta notebook 2.Ingest_racing_data",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/2.Ingest_racing_data",
                 "source": "WORKSPACE"
@@ -187,7 +247,7 @@ jobs:
             },
             {
               "task_key": "Transform",
-              "description": "Ejecuta notebook Transform",
+              "description": "Ejecuta notebook 3.Transform",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/3.Transform",
                 "source": "WORKSPACE"
@@ -197,7 +257,7 @@ jobs:
               "max_retries": 2,
               "depends_on": [
                 {
-                  "task_key": "Imgest_circuits_data"
+                  "task_key": "Ingest_circuits_data"
                 },
                 {
                   "task_key": "Ingest_Constructors"
@@ -209,7 +269,7 @@ jobs:
             },
             {
               "task_key": "Load",
-              "description": "Ejecuta notebook Load",
+              "description": "Ejecuta notebook 4.Load",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/4.Load",
                 "source": "WORKSPACE"
@@ -246,7 +306,6 @@ jobs:
         }
         EOF
         
-        # Crear el workflow
         create_response=$(curl -s -X POST \
           -H "Authorization: Bearer $DEST_TOKEN" \
           -H "Content-Type: application/json" \
@@ -255,13 +314,11 @@ jobs:
         
         echo "Workflow creation response: $create_response"
         
-        # Extraer job_id del response
         job_id=$(echo "$create_response" | jq -r '.job_id')
         
         if [ "$job_id" != "" ] && [ "$job_id" != "null" ]; then
           echo "✅ Workflow 'WF_ADB' creado exitosamente con ID: $job_id"
           
-          # Obtener detalles del workflow creado
           workflow_details=$(curl -s -X GET \
             -H "Authorization: Bearer $DEST_TOKEN" \
             "$DEST_HOST/api/2.1/jobs/get?job_id=$job_id")
@@ -282,7 +339,6 @@ jobs:
         
         echo "🔍 Validando la configuración del workflow creado..."
         
-        # Obtener lista de workflows y encontrar el recién creado
         workflows_list=$(curl -s -X GET \
           -H "Authorization: Bearer $DEST_TOKEN" \
           "$DEST_HOST/api/2.1/jobs/list")
@@ -292,21 +348,22 @@ jobs:
         if [ "$job_id" != "" ] && [ "$job_id" != "null" ]; then
           echo "✅ Workflow encontrado con ID: $job_id"
           
-          # Obtener configuración detallada
           job_details=$(curl -s -X GET \
             -H "Authorization: Bearer $DEST_TOKEN" \
             "$DEST_HOST/api/2.1/jobs/get?job_id=$job_id")
           
-          echo "📋 Resumen del  workflow:"
+          echo "📋 Resumen del workflow:"
           echo "Nombre: $(echo "$job_details" | jq -r '.settings.name')"
           echo "Número de tareas: $(echo "$job_details" | jq '.settings.tasks | length')"
           echo ""
           echo "📝 Tareas configuradas:"
           echo "$job_details" | jq -r '.settings.tasks[] | "- " + .task_key + " → " + .notebook_task.notebook_path'
           echo ""
+          echo "🔗 Dependencias:"
+          echo "$job_details" | jq -r '.settings.tasks[] | select(.depends_on) | .task_key + " depende de: " + ([.depends_on[].task_key] | join(", "))'
+          echo ""
           echo "🖥️  Cluster configurado:"
           echo "Cluster ID: $(echo "$job_details" | jq -r '.settings.tasks[0].existing_cluster_id')"
-          echo "Cluster Name: cluster_SD (reutilizado)"
           
         else
           echo "❌ No se pudo encontrar el workflow creado"
@@ -321,7 +378,6 @@ jobs:
         
         echo "🚀 Ejecutando workflow: $WORKFLOW_NAME"
         
-        # Obtener job_id del workflow
         workflows_list=$(curl -s -X GET \
           -H "Authorization: Bearer $DEST_TOKEN" \
           "$DEST_HOST/api/2.1/jobs/list")
@@ -331,7 +387,6 @@ jobs:
         if [ "$job_id" != "" ] && [ "$job_id" != "null" ]; then
           echo "✅ Workflow encontrado con ID: $job_id"
           
-          # Ejecutar el workflow
           run_response=$(curl -s -X POST \
             -H "Authorization: Bearer $DEST_TOKEN" \
             -H "Content-Type: application/json" \
@@ -345,10 +400,7 @@ jobs:
             echo "Run ID: $run_id"
             echo "WORKFLOW_RUN_ID=$run_id" >> $GITHUB_ENV
             echo "WORKFLOW_JOB_ID=$job_id" >> $GITHUB_ENV
-            
-            # Mostrar URL del workflow en ejecución
             echo "🔗 URL del workflow: $DEST_HOST/jobs/$job_id/runs/$run_id"
-            
           else
             echo "❌ Error al ejecutar el workflow"
             echo "Response: $run_response"
@@ -369,80 +421,162 @@ jobs:
         echo "📊 Monitoreando ejecución del workflow..."
         echo "Job ID: $JOB_ID"
         echo "Run ID: $RUN_ID"
+        echo "🔗 URL: $DEST_HOST/#job/$JOB_ID/run/$RUN_ID"
+        echo ""
         
-        # Monitorear por máximo 10 minutos (600 segundos)
         max_wait_time=600
         wait_time=0
         check_interval=30
         
         while [ $wait_time -lt $max_wait_time ]; do
-          # Obtener estado actual
           run_status=$(curl -s -X GET \
             -H "Authorization: Bearer $DEST_TOKEN" \
             "$DEST_HOST/api/2.1/jobs/runs/get?run_id=$RUN_ID")
           
           state=$(echo "$run_status" | jq -r '.state.life_cycle_state')
           result_state=$(echo "$run_status" | jq -r '.state.result_state // "RUNNING"')
+          state_message=$(echo "$run_status" | jq -r '.state.state_message // ""')
           
-          echo "⏱️  Estado actual: $state ($result_state) - Tiempo transcurrido: ${wait_time}s"
+          echo "═══════════════════════════════════════════════════"
+          echo "⏱️  [${wait_time}s] Estado: $state | Resultado: $result_state"
+          if [ -n "$state_message" ] && [ "$state_message" != "" ]; then
+            echo "   Mensaje: $state_message"
+          fi
+          echo ""
           
-          # Mostrar progreso de las tareas
-          echo "$run_status" | jq -r '.tasks[]? | "  📋 " + .task_key + ": " + .state.life_cycle_state + " (" + (.state.result_state // "RUNNING") + ")"'
+          # Mostrar progreso de cada tarea con más detalle
+          echo "$run_status" | jq -r '.tasks[]? | "  📋 " + .task_key + ": " + .state.life_cycle_state + " (" + (.state.result_state // "PENDING") + ")" + if .state.state_message and .state.state_message != "" then "\n     ↳ " + .state.state_message else "" end'
+          echo ""
           
           case "$state" in
             "TERMINATED")
               if [ "$result_state" = "SUCCESS" ]; then
                 echo "🎉 ¡Workflow completado exitosamente!"
-                
-                # Mostrar resumen final
                 echo ""
                 echo "📈 Resumen de ejecución:"
-                echo "$run_status" | jq -r '.tasks[]? | "✅ " + .task_key + " → " + (.state.result_state // "SUCCESS")'
+                echo "$run_status" | jq -r '.tasks[]? | "  ✅ " + .task_key + " → " + (.state.result_state // "SUCCESS")'
                 
-                # Obtener duración
                 start_time=$(echo "$run_status" | jq -r '.start_time')
                 end_time=$(echo "$run_status" | jq -r '.end_time')
                 if [ "$start_time" != "null" ] && [ "$end_time" != "null" ]; then
                   duration=$((($end_time - $start_time) / 1000))
+                  echo ""
                   echo "⏰ Duración total: ${duration} segundos"
                 fi
-                
                 exit 0
               else
-
-                echo "❌ Workflow terminó con errores: $result_state"
-                echo "📋 Detalles de las tareassss:"
-                echo "$run_status" | jq -r '.tasks[]? | "❌ " + .task_key + ": " + (.state.result_state // "UNKNOWN")'
-
-                # Buscar la primera tarea fallida y pedir el output detallado
-                failed_task_run_id=$(echo "$run_status" | jq -r '.tasks[]? | select(.state.result_state=="FAILED") | .run_id' | head -n 1)
-                failed_task_key=$(echo "$run_status" | jq -r '.tasks[]? | select(.state.result_state=="FAILED") | .task_key' | head -n 1)
-
+                echo "══════════════════════════════════════════════════════"
+                echo "❌ WORKFLOW TERMINÓ CON ERRORES"
+                echo "══════════════════════════════════════════════════════"
                 echo ""
-                echo "🔗 Link del run en Databricks: $DEST_HOST/#job/$JOB_ID/run/$RUN_ID"
-                echo "❌ Tarea fallida: $failed_task_key (run_id tarea: $failed_task_run_id)"
-
-                if [ -n "$failed_task_run_id" ] && [ "$failed_task_run_id" != "null" ]; then
-                  task_output=$(curl -s -X GET \
-                    -H "Authorization: Bearer $DEST_TOKEN" \
-                    "$DEST_HOST/api/2.1/jobs/runs/get-output?run_id=$failed_task_run_id")
-
-                  echo "📄 Error detallado del notebook (si la API lo devuelve):"
-                  echo "$task_output" | jq '.error, .notebook_output, .metadata' 2>/dev/null || echo "$task_output"
+                
+                # Resumen de todas las tareas
+                echo "📋 Estado de todas las tareas:"
+                echo "$run_status" | jq -r '.tasks[]? | (if .state.result_state == "FAILED" then "  ❌ " elif .state.result_state == "SUCCESS" then "  ✅ " elif .state.result_state == "UPSTREAM_FAILED" then "  ⛔ " else "  ⏭️  " end) + .task_key + " → " + (.state.result_state // "UNKNOWN")'
+                echo ""
+                
+                # Iterar TODAS las tareas fallidas (no solo la primera)
+                echo "🔍 DETALLE DE TAREAS FALLIDAS:"
+                echo "──────────────────────────────────────────────────────"
+                
+                failed_tasks=$(echo "$run_status" | jq -r '.tasks[]? | select(.state.result_state=="FAILED") | .task_key + "|" + (.run_id | tostring)')
+                
+                if [ -z "$failed_tasks" ]; then
+                  echo "  No se pudieron extraer tareas fallidas del response."
+                  echo "  State message general: $state_message"
+                  echo ""
+                  echo "  Response completo del run:"
+                  echo "$run_status" | jq '.state'
+                else
+                  echo "$failed_tasks" | while IFS='|' read -r task_key task_run_id; do
+                    echo ""
+                    echo "  ┌─── Tarea: $task_key (run_id: $task_run_id)"
+                    
+                    # Obtener state_message de la tarea
+                    task_state_msg=$(echo "$run_status" | jq -r --arg tk "$task_key" '.tasks[]? | select(.task_key == $tk) | .state.state_message // "Sin mensaje"')
+                    echo "  │ Mensaje de estado: $task_state_msg"
+                    
+                    # Obtener output detallado del notebook
+                    if [ -n "$task_run_id" ] && [ "$task_run_id" != "null" ]; then
+                      echo "  │"
+                      echo "  │ Obteniendo output detallado del notebook..."
+                      task_output=$(curl -s -X GET \
+                        -H "Authorization: Bearer $DEST_TOKEN" \
+                        "$DEST_HOST/api/2.1/jobs/runs/get-output?run_id=$task_run_id")
+                      
+                      # Extraer error principal
+                      error_msg=$(echo "$task_output" | jq -r '.error // empty')
+                      if [ -n "$error_msg" ]; then
+                        echo "  │"
+                        echo "  │ 💥 ERROR:"
+                        echo "$error_msg" | sed 's/^/  │   /'
+                      fi
+                      
+                      # Extraer error_trace (traceback completo)
+                      error_trace=$(echo "$task_output" | jq -r '.error_trace // empty')
+                      if [ -n "$error_trace" ]; then
+                        echo "  │"
+                        echo "  │ 📜 TRACEBACK COMPLETO:"
+                        echo "$error_trace" | sed 's/^/  │   /'
+                      fi
+                      
+                      # Extraer notebook_output si existe
+                      nb_result=$(echo "$task_output" | jq -r '.notebook_output.result // empty')
+                      nb_truncated=$(echo "$task_output" | jq -r '.notebook_output.truncated // empty')
+                      if [ -n "$nb_result" ]; then
+                        echo "  │"
+                        echo "  │ 📓 OUTPUT DEL NOTEBOOK:"
+                        echo "$nb_result" | sed 's/^/  │   /'
+                        if [ "$nb_truncated" = "true" ]; then
+                          echo "  │   ⚠️  (output truncado - ver Databricks UI para resultado completo)"
+                        fi
+                      fi
+                      
+                      # Metadata adicional
+                      nb_path=$(echo "$task_output" | jq -r '.metadata.notebook_task.notebook_path // empty')
+                      cluster_used=$(echo "$task_output" | jq -r '.metadata.existing_cluster_id // .metadata.cluster_instance.cluster_id // empty')
+                      if [ -n "$nb_path" ]; then
+                        echo "  │"
+                        echo "  │ 📂 Notebook: $nb_path"
+                      fi
+                      if [ -n "$cluster_used" ]; then
+                        echo "  │ 🖥️  Cluster: $cluster_used"
+                      fi
+                      
+                      # Si no se obtuvo ningún detalle, mostrar response raw
+                      if [ -z "$error_msg" ] && [ -z "$error_trace" ] && [ -z "$nb_result" ]; then
+                        echo "  │"
+                        echo "  │ ⚠️  No se encontró error detallado en la API. Response completo:"
+                        echo "$task_output" | jq '.' | sed 's/^/  │   /'
+                      fi
+                    fi
+                    
+                    echo "  └───────────────────────────────────────────────"
+                  done
                 fi
-
+                
+                # Tareas saltadas por dependencia
+                upstream_failed=$(echo "$run_status" | jq -r '.tasks[]? | select(.state.result_state=="UPSTREAM_FAILED") | .task_key')
+                if [ -n "$upstream_failed" ]; then
+                  echo ""
+                  echo "⛔ Tareas saltadas (dependencia falló):"
+                  echo "$upstream_failed" | sed 's/^/  - /'
+                fi
+                
+                echo ""
+                echo "🔗 Ver ejecución completa en: $DEST_HOST/#job/$JOB_ID/run/$RUN_ID"
                 exit 1
-
-
-
               fi
               ;;
             "INTERNAL_ERROR"|"SKIPPED")
               echo "❌ Workflow falló con estado: $state"
+              echo "Mensaje: $state_message"
+              echo ""
+              echo "Response completo:"
+              echo "$run_status" | jq '.state'
               exit 1
               ;;
             *)
-              # Estados: PENDING, RUNNING, TERMINATING
               echo "⏳ Workflow aún ejecutándose..."
               ;;
           esac
@@ -452,7 +586,7 @@ jobs:
         done
         
         echo "⚠️  Timeout: El workflow aún se está ejecutando después de $max_wait_time segundos"
-        echo "🔗 Verifica el estado en: $DEST_HOST/jobs/$JOB_ID/runs/$RUN_ID"
+        echo "🔗 Verifica el estado en: $DEST_HOST/#job/$JOB_ID/run/$RUN_ID"
         echo "ℹ️  El workflow seguirá ejecutándose en Databricks"
         exit 0
     
@@ -466,12 +600,15 @@ jobs:
         echo "🎉 ¡Despliegue y ejecución completados exitosamente!"
         echo ""
         echo "📊 Resumen:"
-        echo "✅ Notebooks desplegados: ntbk_1, ntbk_2"
+        echo "✅ Notebooks desplegados:"
+        echo "   - 1.Preparacion_Ambiente"
+        echo "   - 2.Ingest_circuits_data"
+        echo "   - 2.Ingest_Constructors"
+        echo "   - 2.Ingest_racing_data"
+        echo "   - 3.Transform"
+        echo "   - 4.Load"
         echo "✅ Workflow creado: WF_ADB"
-        echo "✅ Tareas configuradas:"
-        echo "   - tarea1_notebook1 (ntbk_1)"
-        echo "   - tarea2_notebook2 (ntbk_2)"
-        echo "✅ Cluster existente: cluster_SD configurado"
+        echo "✅ Cluster existente: cluster_SD"
         echo "🚀 Workflow ejecutado automáticamente"
         echo ""
         echo "🔗 Accede a tu workspace de Databricks para ver los resultados detallados"
