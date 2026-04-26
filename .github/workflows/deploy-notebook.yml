@@ -22,7 +22,7 @@ jobs:
         NOTEBOOKS=("2.Ingest_circuits_data" "1.Preparacion_Ambiente" "2.Ingest_Constructors" "2.Ingest_racing_data" "3.Transform" "4.Load")  # Agrega más según necesitesas
         mkdir -p notebooks_to_deploy
         for nb in "${NOTEBOOKS[@]}"; do
-          echo "Exportando $nb en modo raw..."
+          echo "Exportando $nb en modo raw....."
           curl -s -X GET \
             -H "Authorization: Bearer $ORIGIN_TOKEN" \
             "$ORIGIN_HOST/api/2.0/workspace/export?path=$NOTEBOOK_BASE/$nb&format=SOURCE&direct_download=true" \
