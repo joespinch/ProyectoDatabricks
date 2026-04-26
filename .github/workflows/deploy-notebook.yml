@@ -409,10 +409,32 @@ jobs:
                 
                 exit 0
               else
+
                 echo "❌ Workflow terminó con errores: $result_state"
                 echo "📋 Detalles de las tareas:"
                 echo "$run_status" | jq -r '.tasks[]? | "❌ " + .task_key + ": " + (.state.result_state // "UNKNOWN")'
+
+                # Buscar la primera tarea fallida y pedir el output detallado
+                failed_task_run_id=$(echo "$run_status" | jq -r '.tasks[]? | select(.state.result_state=="FAILED") | .run_id' | head -n 1)
+                failed_task_key=$(echo "$run_status" | jq -r '.tasks[]? | select(.state.result_state=="FAILED") | .task_key' | head -n 1)
+
+                echo ""
+                echo "🔗 Link del run en Databricks: $DEST_HOST/#job/$JOB_ID/run/$RUN_ID"
+                echo "❌ Tarea fallida: $failed_task_key (run_id tarea: $failed_task_run_id)"
+
+                if [ -n "$failed_task_run_id" ] && [ "$failed_task_run_id" != "null" ]; then
+                  task_output=$(curl -s -X GET \
+                    -H "Authorization: Bearer $DEST_TOKEN" \
+                    "$DEST_HOST/api/2.1/jobs/runs/get-output?run_id=$failed_task_run_id")
+
+                  echo "📄 Error detallado del notebook (si la API lo devuelve):"
+                  echo "$task_output" | jq '.error, .notebook_output, .metadata' 2>/dev/null || echo "$task_output"
+                fi
+
                 exit 1
+
+
+
               fi
               ;;
             "INTERNAL_ERROR"|"SKIPPED")
