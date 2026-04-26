@@ -411,7 +411,7 @@ jobs:
               else
 
                 echo "❌ Workflow terminó con errores: $result_state"
-                echo "📋 Detalles de las tareas:"
+                echo "📋 Detalles de las tareassss:"
                 echo "$run_status" | jq -r '.tasks[]? | "❌ " + .task_key + ": " + (.state.result_state // "UNKNOWN")'
 
                 # Buscar la primera tarea fallida y pedir el output detallado
