@@ -134,7 +134,7 @@ jobs:
                 "notebook_path": "/smartdata/scripts/main/1.Preparacion_Ambiente",
                 "source": "WORKSPACE"
               },
-              "job_cluster_key": "serverless_cluster",
+              "existing_cluster_id": "$CLUSTER_ID",
               "timeout_seconds": 3600,
               "max_retries": 2
             },
@@ -145,7 +145,7 @@ jobs:
                 "notebook_path": "/smartdata/scripts/main/2.Ingest_circuits_data",
                 "source": "WORKSPACE"
               },
-              "job_cluster_key": "serverless_cluster",
+              "existing_cluster_id": "$CLUSTER_ID",
               "timeout_seconds": 3600,
               "max_retries": 2,
               "depends_on": [
@@ -161,7 +161,7 @@ jobs:
                 "notebook_path": "/smartdata/scripts/main/2.Ingest_Constructors",
                 "source": "WORKSPACE"
               },
-              "job_cluster_key": "serverless_cluster",
+              "existing_cluster_id": "$CLUSTER_ID",
               "timeout_seconds": 3600,
               "max_retries": 2,
               "depends_on": [
@@ -177,7 +177,7 @@ jobs:
                 "notebook_path": "/smartdata/scripts/main/2.Ingest_racing_data",
                 "source": "WORKSPACE"
               },
-              "job_cluster_key": "serverless_cluster",
+              "existing_cluster_id": "$CLUSTER_ID",
               "timeout_seconds": 3600,
               "max_retries": 2,
               "depends_on": [
@@ -193,7 +193,7 @@ jobs:
                 "notebook_path": "/smartdata/scripts/main/3.Transform",
                 "source": "WORKSPACE"
               },
-              "job_cluster_key": "serverless_cluster",
+              "existing_cluster_id": "$CLUSTER_ID",
               "timeout_seconds": 3600,
               "max_retries": 2,
               "depends_on": [
@@ -215,7 +215,7 @@ jobs:
                 "notebook_path": "/smartdata/scripts/main/4.Load",
                 "source": "WORKSPACE"
               },
-              "job_cluster_key": "serverless_cluster",
+              "existing_cluster_id": "$CLUSTER_ID",
               "timeout_seconds": 3600,
               "max_retries": 2,
               "depends_on": [
