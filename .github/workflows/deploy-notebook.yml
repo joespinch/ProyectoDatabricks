@@ -115,7 +115,7 @@ jobs:
       run: |
         DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
-        DEST_BASE="/py/scripts/main"
+        DEST_BASE="/smartdata/scripts/main"
         CLUSTER_ID="${{ env.CLUSTER_ID }}"
         
         echo "Creando workflow: WF_ADB con cluster existente ID: $CLUSTER_ID"
@@ -131,9 +131,12 @@ jobs:
               "description": "Ejecuta notebook 1.Preparacion_Ambiente",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/1.Preparacion_Ambiente",
-                "source": "WORKSPACE"
+                "source": "WORKSPACE",
+                  "base_parameters": {
+                  "storageName": "adlsproyectoje"
+                  }
               },
-              "existing_cluster_id": "$CLUSTER_ID",
+              "job_cluster_key": "serverless_cluster",
               "timeout_seconds": 3600,
               "max_retries": 2
             },
@@ -142,9 +145,15 @@ jobs:
               "description": "Ejecuta notebook 2.Ingest_circuits_data",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/2.Ingest_circuits_data",
-                "source": "WORKSPACE"
+                "source": "WORKSPACE",
+                  "base_parameters": {
+                  "container": "raw",
+                  "catalogo": "catalog_au",
+                  "esquema": "bronze",
+                  "storageName": "adlsproyectoje"
+                  }
               },
-              "existing_cluster_id": "$CLUSTER_ID",
+              "job_cluster_key": "serverless_cluster",
               "timeout_seconds": 3600,
               "max_retries": 2,
               "depends_on": [
@@ -158,9 +167,15 @@ jobs:
               "description": "Ejecuta notebook 2.Ingest_Constructors",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/2.Ingest_Constructors",
-                "source": "WORKSPACE"
+                "source": "WORKSPACE",
+                  "base_parameters": {
+                  "container": "raw",
+                  "catalogo": "catalog_au",
+                  "esquema": "bronze",
+                  "storageName": "adlsproyectoje"
+                  }
               },
-              "existing_cluster_id": "$CLUSTER_ID",
+              "job_cluster_key": "serverless_cluster",
               "timeout_seconds": 3600,
               "max_retries": 2,
               "depends_on": [
@@ -174,9 +189,15 @@ jobs:
               "description": "Ejecuta notebook 2.Ingest_racing_data",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/2.Ingest_racing_data",
-                "source": "WORKSPACE"
+                "source": "WORKSPACE",
+                  "base_parameters": {
+                  "container": "raw",
+                  "catalogo": "catalog_au",
+                  "esquema": "bronze",
+                  "storageName": "adlsproyectoje"
+                  }
               },
-              "existing_cluster_id": "$CLUSTER_ID",
+              "job_cluster_key": "serverless_cluster",
               "timeout_seconds": 3600,
               "max_retries": 2,
               "depends_on": [
@@ -190,9 +211,14 @@ jobs:
               "description": "Ejecuta notebook 3.Transform",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/3.Transform",
-                "source": "WORKSPACE"
+                "source": "WORKSPACE",
+                  "base_parameters": {
+                  "catalogo": "catalog_au",
+                  "esquema_source": "bronze",
+                  "esquema_sink": "silver"
+                }
               },
-              "existing_cluster_id": "$CLUSTER_ID",
+              "job_cluster_key": "serverless_cluster",
               "timeout_seconds": 3600,
               "max_retries": 2,
               "depends_on": [
@@ -212,14 +238,35 @@ jobs:
               "description": "Ejecuta notebook 4.Load",
               "notebook_task": {
                 "notebook_path": "/smartdata/scripts/main/4.Load",
-                "source": "WORKSPACE"
+                "source": "WORKSPACE",
+                  "base_parameters": {
+                  "catalogo": "catalog_au",
+                  "esquema_source": "silver",
+                  "esquema_sink": "golden"
+                }
               },
-              "existing_cluster_id": "$CLUSTER_ID",
+              "job_cluster_key": "serverless_cluster",
               "timeout_seconds": 3600,
               "max_retries": 2,
               "depends_on": [
                 {
                   "task_key": "Transform"
+                }
+              ]
+            },
+            {
+              "task_key": "Grants_Medallion",
+              "description": "Ejecuta notebook 5.Grants_Medallion",
+              "notebook_task": {
+                "notebook_path": "/smartdata/scripts/main/5.Grants_Medallion",
+                "source": "WORKSPACE"
+              },
+              "job_cluster_key": "serverless_cluster",
+              "timeout_seconds": 3600,
+              "max_retries": 2,
+              "depends_on": [
+                {
+                  "task_key": "Load"
                 }
               ]
             }
