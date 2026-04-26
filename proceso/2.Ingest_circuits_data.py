@@ -4,18 +4,21 @@ dbutils.widgets.removeAll()
 # COMMAND ----------
 
 from pyspark.sql.functions import *
+
 from pyspark.sql.types import *
 
 # COMMAND ----------
 
 dbutils.widgets.text("container", "raw")
+
 dbutils.widgets.text("catalogo", "catalog_au")
 dbutils.widgets.text("esquema", "bronze")
-dbutils.widgets.text("storageName", "adlssmartdata1702")
+dbutils.widgets.text("storageName", "adlsproyectoje")
 
 # COMMAND ----------
 
 container = dbutils.widgets.get("container")
+
 catalogo = dbutils.widgets.get("catalogo")
 esquema = dbutils.widgets.get("esquema")
 storageName = dbutils.widgets.get("storageName")
