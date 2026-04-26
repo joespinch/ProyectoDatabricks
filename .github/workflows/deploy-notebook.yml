@@ -89,7 +89,7 @@ jobs:
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
         CLUSTER_NAME="cluster_SD"
         
-        echo "Buscando cluster existente: $CLUSTER_NAME"
+        echo "Buscando cluster   existente: $CLUSTER_NAME"
         
         # Obtener lista de clusters
         clusters_response=$(curl -s -X GET \
