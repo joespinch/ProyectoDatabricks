@@ -298,7 +298,7 @@ jobs:
             -H "Authorization: Bearer $DEST_TOKEN" \
             "$DEST_HOST/api/2.1/jobs/get?job_id=$job_id")
           
-          echo "📋 Resumen del workflow:"
+          echo "📋 Resumen del  workflow:"
           echo "Nombre: $(echo "$job_details" | jq -r '.settings.name')"
           echo "Número de tareas: $(echo "$job_details" | jq '.settings.tasks | length')"
           echo ""
